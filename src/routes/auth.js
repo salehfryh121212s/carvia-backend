@@ -1,8 +1,8 @@
 import { Router } from "express";
-import { v4 as uuid } from "uuid";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
-import { db } from "../models/store.js";
+import { query } from "../db/pool.js";
+import { toCamel } from "../db/mappers.js";
 
 const router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || "dev_secret_change_me";
@@ -12,7 +12,7 @@ function signToken(user) {
 }
 
 function toPublicUser(user) {
-  const { password, ...publicUser } = user;
+  const { password, ...publicUser } = toCamel(user);
   return publicUser;
 }
 
@@ -24,31 +24,37 @@ router.post("/signup", async (req, res) => {
   }
 
   const contactNormalized = contact.trim().toLowerCase();
-  if (db.users.some((u) => u.contact === contactNormalized)) {
-    return res.status(409).json({ error: "فيه حساب مسجّل مسبقًا بنفس البريد/الجوال" });
+
+  try {
+    // 1) تأكد ما فيه حساب بنفس البريد/الجوال
+    const existing = await query("SELECT id FROM users WHERE contact = $1", [contactNormalized]);
+    if (existing.rows.length > 0) {
+      return res.status(409).json({ error: "فيه حساب مسجّل مسبقًا بنفس البريد/الجوال" });
+    }
+
+    // 2) أنشئ المستخدم (كلمة السر تُشفّر قبل التخزين، زي ما كانت)
+    const passwordHash = await bcrypt.hash(password, 10);
+    const userResult = await query(
+      `INSERT INTO users (full_name, contact, password)
+       VALUES ($1, $2, $3) RETURNING *`,
+      [fullName.trim(), contactNormalized, passwordHash]
+    );
+    const user = userResult.rows[0];
+
+    // 3) أنشئ أول سيارة مربوطة بنفس المستخدم
+    const carResult = await query(
+      `INSERT INTO cars (user_id, name, model, plate)
+       VALUES ($1, $2, $3, $4) RETURNING *`,
+      [user.id, carName.trim(), (carModel || "").trim(), carPlate.trim()]
+    );
+    const car = carResult.rows[0];
+
+    const token = signToken(user);
+    res.status(201).json({ token, user: toPublicUser(user), car: toCamel(car) });
+  } catch (err) {
+    console.error("خطأ بالتسجيل:", err.message);
+    res.status(500).json({ error: "خطأ بالسيرفر، حاول مرة ثانية" });
   }
-
-  const passwordHash = await bcrypt.hash(password, 10);
-  const user = {
-    id: uuid(),
-    fullName: fullName.trim(),
-    contact: contactNormalized,
-    password: passwordHash,
-    createdAt: new Date().toISOString(),
-  };
-  db.users.push(user);
-
-  const car = {
-    id: uuid(),
-    userId: user.id,
-    name: carName.trim(),
-    model: (carModel || "").trim(),
-    plate: carPlate.trim(),
-  };
-  db.cars.push(car);
-
-  const token = signToken(user);
-  res.status(201).json({ token, user: toPublicUser(user), car });
 });
 
 // POST /auth/login
@@ -59,15 +65,25 @@ router.post("/login", async (req, res) => {
   }
 
   const contactNormalized = contact.trim().toLowerCase();
-  const user = db.users.find((u) => u.contact === contactNormalized);
-  const passwordMatches = user ? await bcrypt.compare(password, user.password) : false;
-  if (!user || !passwordMatches) {
-    return res.status(401).json({ error: "البريد/الجوال أو كلمة المرور غير صحيحة" });
-  }
 
-  const token = signToken(user);
-  const cars = db.cars.filter((c) => c.userId === user.id);
-  res.json({ token, user: toPublicUser(user), cars });
+  try {
+    const userResult = await query("SELECT * FROM users WHERE contact = $1", [contactNormalized]);
+    const user = userResult.rows[0];
+    const passwordMatches = user ? await bcrypt.compare(password, user.password) : false;
+
+    if (!user || !passwordMatches) {
+      return res.status(401).json({ error: "البريد/الجوال أو كلمة المرور غير صحيحة" });
+    }
+
+    const token = signToken(user);
+    const carsResult = await query("SELECT * FROM cars WHERE user_id = $1", [user.id]);
+    const cars = carsResult.rows.map(toCamel);
+
+    res.json({ token, user: toPublicUser(user), cars });
+  } catch (err) {
+    console.error("خطأ بتسجيل الدخول:", err.message);
+    res.status(500).json({ error: "خطأ بالسيرفر، حاول مرة ثانية" });
+  }
 });
 
 // Middleware بسيط للتحقق من التوكن — يُستخدم لحماية أي مسار يحتاج تسجيل دخول

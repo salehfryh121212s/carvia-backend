@@ -1,13 +1,8 @@
 import { Router } from "express";
+import { query } from "../db/pool.js";
+import { toCamel } from "../db/mappers.js";
 
 const router = Router();
-
-// بيانات احتياطية (fallback) تُستخدم فقط لو ما فيه GOOGLE_PLACES_API_KEY بملف .env
-// (عشان التطبيق يشتغل ويُختبر حتى قبل ما تجهز مفتاح جوجل)
-const MOCK_WORKSHOPS = [
-  { id: "w_1", name: "ورشة الخليج للسيارات", rating: 4.6, distanceKm: 2.3, address: "بيانات تجريبية" },
-  { id: "w_2", name: "مركز النخبة لصيانة السيارات", rating: 4.3, distanceKm: 4.1, address: "بيانات تجريبية" },
-];
 
 // المسافة بين نقطتين (كم) بصيغة Haversine
 function distanceKm(lat1, lng1, lat2, lng2) {
@@ -21,73 +16,100 @@ function distanceKm(lat1, lng1, lat2, lng2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-// GET /workshops/nearby?lat=..&lng=..
+// GET /workshops/nearby?lat=..&lng=.. — كل الورش/المحلات المسجّلة بالتطبيق، مرتّبة حسب الأقرب
 router.get("/nearby", async (req, res) => {
   const lat = parseFloat(req.query.lat);
   const lng = parseFloat(req.query.lng);
-  const apiKey = process.env.GOOGLE_PLACES_API_KEY;
 
   if (Number.isNaN(lat) || Number.isNaN(lng)) {
     return res.status(400).json({ error: "lat و lng مطلوبين كأرقام صحيحة" });
   }
 
-  if (!apiKey) {
-    // ما فيه مفتاح جوجل مضبوط بعد — نرجع بيانات تجريبية بدل ما نكسر التطبيق
-    return res.json({ workshops: MOCK_WORKSHOPS, source: "mock" });
-  }
-
   try {
-    const url = new URL("https://maps.googleapis.com/maps/api/place/nearbysearch/json");
-    url.searchParams.set("location", `${lat},${lng}`);
-    url.searchParams.set("radius", "8000"); // 8 كم
-    url.searchParams.set("type", "car_repair");
-    url.searchParams.set("language", "ar");
-    url.searchParams.set("key", apiKey);
+    const result = await query("SELECT * FROM workshops");
+    const workshops = result.rows
+      .map((row) => {
+        const w = toCamel(row);
+        return { ...w, distanceKm: Math.round(distanceKm(lat, lng, w.lat, w.lng) * 10) / 10 };
+      })
+      .sort((a, b) => a.distanceKm - b.distanceKm);
 
-    const response = await fetch(url.toString());
-    const data = await response.json();
-
-    if (data.status !== "OK" && data.status !== "ZERO_RESULTS") {
-      console.warn("خطأ من Google Places API:", data.status, data.error_message);
-      return res.json({ workshops: MOCK_WORKSHOPS, source: "mock", googleError: data.status });
-    }
-
-    const workshops = (data.results || [])
-      .map((place) => ({
-        id: place.place_id,
-        name: place.name,
-        rating: place.rating ?? null,
-        userRatingsTotal: place.user_ratings_total ?? 0,
-        address: place.vicinity || "",
-        isOpenNow: place.opening_hours?.open_now ?? null,
-        distanceKm: place.geometry?.location
-          ? Math.round(distanceKm(lat, lng, place.geometry.location.lat, place.geometry.location.lng) * 10) / 10
-          : null,
-        location: place.geometry?.location || null,
-      }))
-      .sort((a, b) => (a.distanceKm ?? 999) - (b.distanceKm ?? 999));
-
-    res.json({ workshops, source: "google" });
-  } catch (e) {
-    console.error("فشل استدعاء Google Places API:", e.message);
-    res.json({ workshops: MOCK_WORKSHOPS, source: "mock", error: "تعذر الاتصال بخدمة الخرائط" });
+    res.json({ workshops });
+  } catch (err) {
+    console.error("خطأ بجلب الورش القريبة:", err.message);
+    res.status(500).json({ error: "خطأ بالسيرفر" });
   }
 });
 
-// POST /workshops/:id/book
-router.post("/:id/book", (req, res) => {
+// GET /workshops/search?q=.. — بحث بالاسم
+router.get("/search", async (req, res) => {
+  const q = (req.query.q || "").trim();
+  if (!q) return res.json({ workshops: [] });
+
+  try {
+    const result = await query(
+      `SELECT * FROM workshops WHERE name ILIKE $1 ORDER BY name LIMIT 30`,
+      [`%${q}%`]
+    );
+    res.json({ workshops: result.rows.map(toCamel) });
+  } catch (err) {
+    console.error("خطأ بالبحث عن ورشة:", err.message);
+    res.status(500).json({ error: "خطأ بالسيرفر" });
+  }
+});
+
+// POST /workshops — يضيف المستخدم ورشة/محل جديد بنفسه (من الخريطة)
+router.post("/", async (req, res) => {
+  const { name, category, address, phone, lat, lng } = req.body;
+
+  if (!name || lat == null || lng == null) {
+    return res.status(400).json({ error: "name و lat و lng مطلوبين" });
+  }
+  if (category && !["workshop", "shop"].includes(category)) {
+    return res.status(400).json({ error: "category لازم يكون workshop أو shop" });
+  }
+
+  try {
+    const result = await query(
+      `INSERT INTO workshops (name, category, address, phone, lat, lng, added_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [name.trim(), category || "workshop", address || "", (phone || "").trim(), lat, lng, req.userId || null]
+    );
+    res.status(201).json(toCamel(result.rows[0]));
+  } catch (err) {
+    console.error("خطأ بإضافة ورشة:", err.message);
+    res.status(500).json({ error: "خطأ بالسيرفر" });
+  }
+});
+
+// POST /workshops/:id/book — (التسجيل مطلوب أصلاً بكل /workshops/* من index.js)
+router.post("/:id/book", async (req, res) => {
   const { carId, preferredTime } = req.body;
   if (!carId) return res.status(400).json({ error: "carId مطلوب" });
 
-  // TODO: منطق حجز فعلي (تخزين طلب الحجز + إشعار الورشة) + عمولة الحجز إن وجدت.
-  // ملاحظة قانونية: لو فيه عمولة، لازم إفصاح واضح للمستخدم (راجع LEGAL_NOTES.md).
-  res.status(201).json({
-    bookingId: `bk_${Date.now()}`,
-    workshopId: req.params.id,
-    carId,
-    preferredTime: preferredTime || null,
-    status: "pending_confirmation",
-  });
+  try {
+    // تأكد إن السيارة فعلاً تخص المستخدم المسجّل دخوله (نفس مبدأ checkCarOwnership)
+    const carResult = await query("SELECT id FROM cars WHERE id = $1 AND user_id = $2", [carId, req.userId]);
+    if (carResult.rows.length === 0) {
+      return res.status(404).json({ error: "السيارة غير موجودة" });
+    }
+
+    // تأكد إن الورشة/المحل فعلاً موجود
+    const workshopResult = await query("SELECT id FROM workshops WHERE id = $1", [req.params.id]);
+    if (workshopResult.rows.length === 0) {
+      return res.status(404).json({ error: "الورشة غير موجودة" });
+    }
+
+    const result = await query(
+      `INSERT INTO bookings (workshop_id, car_id, user_id, preferred_time, status)
+       VALUES ($1, $2, $3, $4, 'pending_confirmation') RETURNING *`,
+      [req.params.id, carId, req.userId, preferredTime || null]
+    );
+    res.status(201).json(toCamel(result.rows[0]));
+  } catch (err) {
+    console.error("خطأ بإنشاء الحجز:", err.message);
+    res.status(500).json({ error: "خطأ بالسيرفر" });
+  }
 });
 
 export default router;

@@ -13,6 +13,13 @@ import { termsOfServiceHtml } from "./legal/terms.js";
 
 dotenv.config();
 
+if (!process.env.JWT_SECRET) {
+  console.warn(
+    "⚠️ تحذير: JWT_SECRET غير معرّف بملف .env — يستخدم قيمة افتراضية غير آمنة. " +
+    "لازم تحطه قبل نشر السيرفر الحقيقي، وإلا أي شخص يقدر يزوّر جلسات دخول."
+  );
+}
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -31,6 +38,8 @@ app.use("/cars", carsRouter);
 app.use("/cars", readingsRouter);
 app.use("/cars", issuesRouter);
 app.use("/cars", maintenanceRouter);
+// كل مسارات /workshops/* لازم تسجيل دخول برضو — ما فيه شي بالتطبيق يفتح بدون حساب
+app.use("/workshops", requireAuth);
 app.use("/workshops", workshopsRouter);
 
 const PORT = process.env.PORT || 4000;
