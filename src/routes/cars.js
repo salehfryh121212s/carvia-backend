@@ -62,4 +62,31 @@ router.get("/:id/health", checkCarOwnership, async (req, res) => {
   }
 });
 
+// PATCH /cars/:id — تعديل بيانات سيارة (الاسم/الموديل/رقم اللوحة)
+router.patch("/:id", checkCarOwnership, async (req, res) => {
+  const { name, model, plate } = req.body;
+  try {
+    const result = await query(
+      `UPDATE cars SET name = COALESCE($1, name), model = COALESCE($2, model), plate = COALESCE($3, plate)
+       WHERE id = $4 RETURNING *`,
+      [name, model, plate, req.params.id]
+    );
+    res.json(toCamel(result.rows[0]));
+  } catch (err) {
+    console.error("خطأ بتعديل السيارة:", err.message);
+    res.status(500).json({ error: "خطأ بالسيرفر" });
+  }
+});
+
+// DELETE /cars/:id — حذف سيارة (يحذف معها القراءات وسجل الصيانة والحجوزات المرتبطة تلقائيًا)
+router.delete("/:id", checkCarOwnership, async (req, res) => {
+  try {
+    await query("DELETE FROM cars WHERE id = $1", [req.params.id]);
+    res.status(204).send();
+  } catch (err) {
+    console.error("خطأ بحذف السيارة:", err.message);
+    res.status(500).json({ error: "خطأ بالسيرفر" });
+  }
+});
+
 export default router;
