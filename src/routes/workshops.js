@@ -112,4 +112,22 @@ router.post("/:id/book", async (req, res) => {
   }
 });
 
+// DELETE /workshops/:id — يحذف ورشة/محل أضافه نفس المستخدم فقط
+router.delete("/:id", async (req, res) => {
+  try {
+    const result = await query("SELECT added_by FROM workshops WHERE id = $1", [req.params.id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "الورشة غير موجودة" });
+    }
+    if (result.rows[0].added_by !== req.userId) {
+      return res.status(403).json({ error: "ما تقدر تحذف ورشة ما أضفتها أنت" });
+    }
+    await query("DELETE FROM workshops WHERE id = $1", [req.params.id]);
+    res.status(204).send();
+  } catch (err) {
+    console.error("خطأ بحذف ورشة:", err.message);
+    res.status(500).json({ error: "خطأ بالسيرفر" });
+  }
+});
+
 export default router;
