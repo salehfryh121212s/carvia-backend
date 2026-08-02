@@ -8,6 +8,7 @@ import readingsRouter from "./routes/readings.js";
 import issuesRouter from "./routes/issues.js";
 import maintenanceRouter from "./routes/maintenance.js";
 import workshopsRouter from "./routes/workshops.js";
+import assistantRouter from "./routes/assistant.js";
 import { privacyPolicyHtml } from "./legal/privacy.js";
 import { termsOfServiceHtml } from "./legal/terms.js";
 
@@ -41,6 +42,9 @@ app.use("/cars", maintenanceRouter);
 // كل مسارات /workshops/* لازم تسجيل دخول برضو — ما فيه شي بالتطبيق يفتح بدون حساب
 app.use("/workshops", requireAuth);
 app.use("/workshops", workshopsRouter);
+// مسار المساعد الذكي — لازم تسجيل دخول برضو
+app.use("/assistant", requireAuth);
+app.use("/assistant", assistantRouter);
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
