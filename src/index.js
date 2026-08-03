@@ -1,6 +1,10 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+import { pool } from "./db/pool.js";
 
 import authRouter, { requireAuth } from "./routes/auth.js";
 import carsRouter from "./routes/cars.js";
@@ -47,6 +51,21 @@ app.use("/assistant", requireAuth);
 app.use("/assistant", assistantRouter);
 
 const PORT = process.env.PORT || 4000;
+// يشغّل تعديلات قاعدة البيانات (schema.sql) تلقائيًا كل ما يشتغل السيرفر.
+// كل الأوامر بالملف مكتوبة بصيغة "IF NOT EXISTS" فآمنة تتكرر بدون أي ضرر.
+async function runMigrations() {
+  try {
+    const __dirname = path.dirname(fileURLToPath(import.meta.url));
+    const schemaPath = path.join(__dirname, "db", "schema.sql");
+    const schemaSql = fs.readFileSync(schemaPath, "utf-8");
+    await pool.query(schemaSql);
+    console.log("✅ قاعدة البيانات محدثة");
+  } catch (err) {
+    console.error("⚠️ فشل تحديث قاعدة البيانات:", err.message);
+  }
+}
+await runMigrations();
+
 app.listen(PORT, () => {
   console.log(`Carvia API running on port ${PORT}`);
 });
