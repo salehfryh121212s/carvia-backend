@@ -64,12 +64,18 @@ router.get("/:id/health", checkCarOwnership, async (req, res) => {
 
 // PATCH /cars/:id — تعديل بيانات سيارة (الاسم/الموديل/رقم اللوحة)
 router.patch("/:id", checkCarOwnership, async (req, res) => {
-  const { name, model, plate } = req.body;
+  const { name, model, plate, registrationExpiry, insuranceExpiry, inspectionExpiry } = req.body;
   try {
     const result = await query(
-      `UPDATE cars SET name = COALESCE($1, name), model = COALESCE($2, model), plate = COALESCE($3, plate)
-       WHERE id = $4 RETURNING *`,
-      [name, model, plate, req.params.id]
+      `UPDATE cars SET
+         name = COALESCE($1, name),
+         model = COALESCE($2, model),
+         plate = COALESCE($3, plate),
+         registration_expiry = COALESCE($4, registration_expiry),
+         insurance_expiry = COALESCE($5, insurance_expiry),
+         inspection_expiry = COALESCE($6, inspection_expiry)
+       WHERE id = $7 RETURNING *`,
+      [name, model, plate, registrationExpiry, insuranceExpiry, inspectionExpiry, req.params.id]
     );
     res.json(toCamel(result.rows[0]));
   } catch (err) {

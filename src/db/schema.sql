@@ -23,6 +23,10 @@ CREATE TABLE IF NOT EXISTS cars (
 );
 -- فهرس يسرّع البحث عن "كل سيارات هذا المستخدم" (نستخدمه كثير)
 CREATE INDEX IF NOT EXISTS idx_cars_user_id ON cars(user_id);
+-- تواريخ انتهاء الأوراق (يدخلها المستخدم بنفسه)
+ALTER TABLE cars ADD COLUMN IF NOT EXISTS registration_expiry DATE;
+ALTER TABLE cars ADD COLUMN IF NOT EXISTS insurance_expiry DATE;
+ALTER TABLE cars ADD COLUMN IF NOT EXISTS inspection_expiry DATE;
 
 -- جدول قراءات OBD
 CREATE TABLE IF NOT EXISTS readings (
